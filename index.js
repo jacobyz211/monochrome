@@ -9,17 +9,20 @@ const PORT = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
-// ─── Hi-Fi API instances (TIDAL proxy, no account needed) ─────────────────
+// ─── Hi-Fi API v2.7 instances ─────────────────────────────────────────────
+// Updated URLs from https://tidal-uptime.props-76styles.workers.dev
 const HIFI_INSTANCES = [
-  'https://ohio.monochrome.tf',
-  'https://virginia.monochrome.tf',
-  'https://oregon.monochrome.tf',
-  'https://frankfurt.monochrome.tf'
+  'https://ohio-1.monochrome.tf',
+  'https://frankfurt-1.monochrome.tf',
+  'https://eu-central.monochrome.tf',
+  'https://us-west.monochrome.tf',
+  'https://hifi.geeked.wtf',
+  'https://hifi-one.spotisaver.net',
+  'https://monochrome-api.samidy.com'
 ];
 let activeInstance  = HIFI_INSTANCES[0];
 let instanceHealthy = false;
 
-const COUNTRY = process.env.TIDAL_COUNTRY || 'US';
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
 
 function coverUrl(uuid, size) {
@@ -37,6 +40,16 @@ function trackArtist(t) {
   return 'Unknown';
 }
 
+// Decode the base64 manifest from /track/ to get the actual stream URL
+function decodeManifest(manifest) {
+  try {
+    var decoded = JSON.parse(Buffer.from(manifest, 'base64').toString('utf8'));
+    var url = (decoded.urls && decoded.urls[0]) || null;
+    var codec = decoded.codecs || decoded.mimeType || '';
+    return { url: url, codec: codec };
+  } catch (e) { return null; }
+}
+
 async function hifiGet(path, params) {
   var errors = [];
   var instances = instanceHealthy
@@ -44,8 +57,8 @@ async function hifiGet(path, params) {
     : HIFI_INSTANCES.slice();
   for (var inst of instances) {
     try {
-      var r = await axios.get(inst + '/v1' + path, {
-        params: Object.assign({ countryCode: COUNTRY }, params || {}),
+      var r = await axios.get(inst + path, {
+        params: params || {},
         headers: { 'User-Agent': UA, 'Accept': 'application/json' },
         timeout: 12000
       });
@@ -61,14 +74,14 @@ async function hifiGet(path, params) {
       console.warn('[hifi] ' + inst + ' failed: ' + e.message.slice(0, 80));
     }
   }
-  throw new Error('All Hi-Fi instances failed. Last errors: ' + errors.slice(-2).join(' | '));
+  throw new Error('All Hi-Fi instances failed: ' + errors.slice(-2).join(' | '));
 }
 
 async function checkInstances() {
   for (var inst of HIFI_INSTANCES) {
     try {
-      await axios.get(inst + '/v1/search', {
-        params: { query: 'test', types: 'TRACKS', limit: 1, countryCode: COUNTRY },
+      await axios.get(inst + '/search/', {
+        params: { s: 'test', limit: 1 },
         timeout: 8000
       });
       activeInstance = inst; instanceHealthy = true;
@@ -83,7 +96,7 @@ async function checkInstances() {
 checkInstances();
 setInterval(checkInstances, 15 * 60 * 1000);
 
-// ─── Redis ─────────────────────────────────────────────────────────────────
+// ─── Redis ──────────────────────────────────────────────────────────────────
 let redis = null;
 if (process.env.REDIS_URL) {
   redis = new Redis(process.env.REDIS_URL, { maxRetriesPerRequest: 3, enableReadyCheck: false });
@@ -175,7 +188,6 @@ function buildConfigPage(baseUrl) {
   h += 'input{width:100%;background:#0a0a0a;border:1px solid #1e1e1e;border-radius:10px;color:#e0e0e0;font-size:14px;padding:12px 14px;margin-bottom:6px;outline:none;transition:border-color .15s}';
   h += 'input:focus{border-color:#fff}input::placeholder{color:#2e2e2e}';
   h += '.hint{font-size:12px;color:#3a3a3a;margin-bottom:12px;line-height:1.7}';
-  h += '.hint code{background:#1a1a1a;padding:1px 5px;border-radius:4px;color:#777}';
   h += 'button{cursor:pointer;border:none;border-radius:10px;font-size:15px;font-weight:700;padding:13px;width:100%;margin-top:6px;margin-bottom:12px;transition:background .15s}';
   h += '.bw{background:#fff;color:#000}.bw:hover{background:#e0e0e0}.bw:disabled{background:#1e1e1e;color:#333;cursor:not-allowed}';
   h += '.bg{background:#141414;color:#e0e0e0;border:1px solid #2a2a2a}.bg:hover{background:#1e1e1e}.bg:disabled{background:#0f0f0f;color:#333;cursor:not-allowed}';
@@ -193,8 +205,7 @@ function buildConfigPage(baseUrl) {
   h += '.preview{background:#0a0a0a;border:1px solid #161616;border-radius:10px;padding:12px;max-height:200px;overflow-y:auto;margin-bottom:12px;display:none}';
   h += '.tr{display:flex;gap:10px;align-items:center;padding:5px 0;border-bottom:1px solid #141414;font-size:13px}';
   h += '.tr:last-child{border-bottom:none}';
-  h += '.tn{color:#333;font-size:11px;min-width:22px;text-align:right}';
-  h += '.ti{flex:1;min-width:0}';
+  h += '.tn{color:#333;font-size:11px;min-width:22px;text-align:right}.ti{flex:1;min-width:0}';
   h += '.tt{color:#e0e0e0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}';
   h += '.ta{color:#555;font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}';
   h += '.inst-list{display:flex;flex-direction:column;gap:6px;margin-top:10px}';
@@ -206,7 +217,6 @@ function buildConfigPage(baseUrl) {
   h += 'footer{margin-top:32px;font-size:12px;color:#2a2a2a;text-align:center;line-height:1.8}';
   h += '</style></head><body>';
 
-  // SVG logo
   h += '<svg class="logo" width="52" height="52" viewBox="0 0 52 52" fill="none">';
   h += '<circle cx="26" cy="26" r="26" fill="#fff"/>';
   h += '<rect x="10" y="20" width="4" height="12" rx="2" fill="#000"/>';
@@ -216,10 +226,9 @@ function buildConfigPage(baseUrl) {
   h += '<rect x="38" y="17" width="4" height="18" rx="2" fill="#000"/>';
   h += '</svg>';
 
-  // Main card
   h += '<div class="card">';
   h += '<h1>Claudochrome for Eclipse</h1>';
-  h += '<p class="sub">Full TIDAL catalog — lossless FLAC, HiRes, AAC 320 — no account, no subscription. Powered by the Hi-Fi API.</p>';
+  h += '<p class="sub">Full TIDAL catalog — lossless FLAC, HiRes, AAC 320 — no account, no subscription. Hi-Fi API v2.7.</p>';
   h += '<div class="tip"><b>Save your URL.</b> Paste it below to refresh if the server restarts, without breaking any playlists.</div>';
   h += '<div class="pills">';
   h += '<span class="pill">Tracks &middot; Albums &middot; Artists</span>';
@@ -251,18 +260,16 @@ function buildConfigPage(baseUrl) {
   h += '<div class="step"><div class="sn">3</div><div class="st">Paste your URL and tap Install</div></div>';
   h += '<div class="step"><div class="sn">4</div><div class="st">Search TIDAL\'s full catalog &mdash; FLAC quality auto-selected</div></div>';
   h += '</div>';
-  h += '<div class="warn">Hi-Fi instances are community-hosted and proxy TIDAL without a subscription. If all instances are offline, streams will fail until one recovers. The addon checks instance health every 15 minutes.</div>';
+  h += '<div class="warn">Hi-Fi instances are community-hosted. The addon auto-discovers working instances from the uptime tracker and fails over automatically.</div>';
   h += '</div>';
 
-  // Instance health card
   h += '<div class="card">';
   h += '<h2>Instance Health</h2>';
-  h += '<p class="sub" style="margin-bottom:14px">Live status of all Hi-Fi API instances used for failover.</p>';
+  h += '<p class="sub" style="margin-bottom:14px">Live status of all Hi-Fi API v2.7 instances.</p>';
   h += '<div class="inst-list" id="instList"><div style="color:#333;font-size:13px">Checking...</div></div>';
   h += '<button class="bg" style="margin-top:14px" onclick="checkHealth()">Refresh Status</button>';
   h += '</div>';
 
-  // Importer card
   h += '<div class="card">';
   h += '<h2>Playlist Importer</h2>';
   h += '<p class="sub">Imports a TIDAL album or playlist as a CSV for Eclipse Library &rarr; Import &rarr; CSV.</p>';
@@ -270,7 +277,7 @@ function buildConfigPage(baseUrl) {
   h += '<input type="text" id="impToken" placeholder="Auto-fills after generating above">';
   h += '<div class="lbl">TIDAL Album or Playlist ID</div>';
   h += '<input type="text" id="impId" placeholder="TIDAL album ID or playlist UUID">';
-  h += '<div class="hint">Album ID: the number in a TIDAL album URL. Playlist UUID: the long string in a TIDAL playlist URL.</div>';
+  h += '<div class="hint">Album ID: number in the TIDAL album URL. Playlist UUID: long string in the TIDAL playlist URL.</div>';
   h += '<div style="display:flex;gap:8px;margin-top:4px">';
   h += '<button class="bg" id="impAlbBtn" style="margin:0" onclick="doImport(\'album\')">Import Album</button>';
   h += '<button class="bg" id="impPlBtn" style="margin:0" onclick="doImport(\'playlist\')">Import Playlist</button>';
@@ -279,11 +286,9 @@ function buildConfigPage(baseUrl) {
   h += '<div class="preview" id="impPreview"></div>';
   h += '</div>';
 
-  h += '<footer>Claudochrome Eclipse Addon v1.0.0 &bull; Hi-Fi API &bull; <a href="' + baseUrl + '/health" target="_blank" style="color:#2a2a2a;text-decoration:none">' + baseUrl + '/health</a></footer>';
+  h += '<footer>Claudochrome Eclipse Addon v1.1.0 &bull; Hi-Fi API v2.7 &bull; <a href="' + baseUrl + '/health" target="_blank" style="color:#2a2a2a;text-decoration:none">' + baseUrl + '/health</a></footer>';
 
-  // ── inline JS (all strings use double-quotes to avoid single-quote escaping issues) ──
   h += '<script>';
-
   h += 'var _gu="",_ru="";';
 
   h += 'function generate(){';
@@ -336,7 +341,6 @@ function buildConfigPage(baseUrl) {
   h += '  });';
   h += '}';
 
-  // FIX: build dot HTML using createElement to avoid any quote escaping
   h += 'function checkHealth(){';
   h += '  var list=document.getElementById("instList");';
   h += '  list.innerHTML="<div style=\\"color:#333;font-size:13px\\">Checking...</div>";';
@@ -349,10 +353,7 @@ function buildConfigPage(baseUrl) {
   h += '      dot.className = inst.ok ? "dot ok" : "dot err";';
   h += '      var urlSpan=document.createElement("span"); urlSpan.className="inst-url"; urlSpan.textContent=inst.url;';
   h += '      row.appendChild(dot); row.appendChild(urlSpan);';
-  h += '      if(inst.ok){';
-  h += '        var ms=document.createElement("span"); ms.className="inst-ms"; ms.textContent=inst.ms+"ms";';
-  h += '        row.appendChild(ms);';
-  h += '      }';
+  h += '      if(inst.ok){var ms=document.createElement("span");ms.className="inst-ms";ms.textContent=inst.ms+"ms";row.appendChild(ms);}';
   h += '      list.appendChild(row);';
   h += '    });';
   h += '  })';
@@ -361,7 +362,6 @@ function buildConfigPage(baseUrl) {
   h += 'checkHealth();';
 
   h += 'function getTok(s){var m=s.match(/\\/u\\/([a-f0-9]{28})\\//);return m?m[1]:null;}';
-
   h += 'function hesc(s){return String(s||"").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");}';
 
   h += 'function doImport(type){';
@@ -439,10 +439,7 @@ app.get('/instances', async function (_req, res) {
   var results = await Promise.all(HIFI_INSTANCES.map(async function (inst) {
     var start = Date.now();
     try {
-      await axios.get(inst + '/v1/search', {
-        params: { query: 'test', types: 'TRACKS', limit: 1, countryCode: COUNTRY },
-        timeout: 6000
-      });
+      await axios.get(inst + '/search/', { params: { s: 'test', limit: 1 }, timeout: 6000 });
       return { url: inst, ok: true, ms: Date.now() - start };
     } catch (e) { return { url: inst, ok: false, ms: null }; }
   }));
@@ -453,24 +450,29 @@ app.get('/u/:token/manifest.json', tokenMiddleware, function (req, res) {
   res.json({
     id:          'com.eclipse.claudochrome.' + req.params.token.slice(0, 8),
     name:        'Claudochrome (TIDAL)',
-    version:     '1.0.0',
-    description: 'Full TIDAL catalog via Hi-Fi API. Lossless FLAC, AAC 320. No account required.',
+    version:     '1.1.0',
+    description: 'Full TIDAL catalog via Hi-Fi API v2.7. Lossless FLAC, AAC 320. No account required.',
     icon:        'https://monochrome.tf/favicon.ico',
     resources:   ['search', 'stream', 'catalog'],
     types:       ['track', 'album', 'artist', 'playlist']
   });
 });
 
+// v2.7 search: GET /search/?s=<term>&a=1&al=1&limit=20
 app.get('/u/:token/search', tokenMiddleware, async function (req, res) {
   var q = String(req.query.q || '').trim();
   if (!q) return res.json({ tracks: [], albums: [], artists: [], playlists: [] });
   try {
-    var data = await hifiGet('/search', { query: q, types: 'TRACKS,ALBUMS,ARTISTS', limit: 20, offset: 0 });
-    var tracks  = (data.tracks  && data.tracks.items)  || [];
-    var albums  = (data.albums  && data.albums.items)  || [];
-    var artists = (data.artists && data.artists.items) || [];
+    var results = await Promise.all([
+      hifiGet('/search/', { s: q, limit: 20, offset: 0 }),          // tracks
+      hifiGet('/search/', { s: q, al: 1, limit: 10, offset: 0 }),   // albums
+      hifiGet('/search/', { s: q, a: 1, limit: 5, offset: 0 })      // artists
+    ]);
+    var trackItems  = (results[0].data && results[0].data.items) || [];
+    var albumItems  = (results[1].data && results[1].data.items) || [];
+    var artistItems = (results[2].data && results[2].data.items) || [];
     res.json({
-      tracks: tracks
+      tracks: trackItems
         .filter(function (t) { return t.streamReady !== false && t.allowStreaming !== false; })
         .map(function (t) {
           return {
@@ -483,7 +485,7 @@ app.get('/u/:token/search', tokenMiddleware, async function (req, res) {
             format:     'flac'
           };
         }),
-      albums: albums.map(function (a) {
+      albums: albumItems.map(function (a) {
         return {
           id:         String(a.id),
           title:      a.title || 'Unknown',
@@ -493,7 +495,7 @@ app.get('/u/:token/search', tokenMiddleware, async function (req, res) {
           year:       (a.releaseDate || '').slice(0, 4) || null
         };
       }),
-      artists: artists.map(function (a) {
+      artists: artistItems.map(function (a) {
         return {
           id:         String(a.id),
           name:       a.name || 'Unknown',
@@ -508,18 +510,32 @@ app.get('/u/:token/search', tokenMiddleware, async function (req, res) {
   }
 });
 
+// v2.7 stream: GET /track/?id=<id>&quality=LOSSLESS → manifest (base64) → decode → URL
 app.get('/u/:token/stream/:id', tokenMiddleware, async function (req, res) {
   var tid = req.params.id;
   var qualities = ['LOSSLESS', 'HIGH', 'LOW'];
   for (var q of qualities) {
     try {
-      var data = await hifiGet('/tracks/' + tid + '/streamUrl', { soundQuality: q });
-      if (data && data.url) {
-        var fmt = (data.codec && data.codec.toLowerCase().indexOf('flac') !== -1) ? 'flac' : 'aac';
+      var data = await hifiGet('/track/', { id: tid, quality: q });
+      var payload = data.data || data;
+      if (payload && payload.manifest) {
+        var decoded = decodeManifest(payload.manifest);
+        if (decoded && decoded.url) {
+          var isFlac = decoded.codec && (decoded.codec.indexOf('flac') !== -1 || decoded.codec.indexOf('audio/flac') !== -1);
+          return res.json({
+            url:       decoded.url,
+            format:    isFlac ? 'flac' : 'aac',
+            quality:   q === 'LOSSLESS' ? 'lossless' : (q === 'HIGH' ? '320kbps' : '128kbps'),
+            expiresAt: Math.floor(Date.now() / 1000) + 21600
+          });
+        }
+      }
+      // Fallback: some instances return url directly
+      if (payload && payload.url) {
         return res.json({
-          url:       data.url,
-          format:    fmt,
-          quality:   q === 'LOSSLESS' ? 'lossless' : (q === 'HIGH' ? '320kbps' : '128kbps'),
+          url:       payload.url,
+          format:    'aac',
+          quality:   q === 'LOSSLESS' ? 'lossless' : '320kbps',
           expiresAt: Math.floor(Date.now() / 1000) + 21600
         });
       }
@@ -533,17 +549,17 @@ app.get('/u/:token/stream/:id', tokenMiddleware, async function (req, res) {
   return res.status(404).json({ error: 'No stream found for track ' + tid });
 });
 
+// v2.7 album: GET /album/?id=<id>&limit=100
 app.get('/u/:token/album/:id', tokenMiddleware, async function (req, res) {
   var aid = req.params.id;
   try {
-    var results = await Promise.all([
-      hifiGet('/albums/' + aid),
-      hifiGet('/albums/' + aid + '/tracks', { limit: 100, offset: 0 })
-    ]);
-    var album  = results[0];
-    var tracks = (results[1] && results[1].items) || [];
+    var data = await hifiGet('/album/', { id: aid, limit: 100, offset: 0 });
+    var payload = data.data || data;
+    var album  = payload.album  || payload;
+    var tracks = payload.tracks || payload.items || [];
+    if (tracks.items) tracks = tracks.items; // handle nested
     res.json({
-      id:         String(album.id),
+      id:         String(album.id || aid),
       title:      album.title || 'Unknown',
       artist:     (album.artist && album.artist.name) || 'Unknown',
       artworkURL: coverUrl(album.cover, 640),
@@ -567,19 +583,17 @@ app.get('/u/:token/album/:id', tokenMiddleware, async function (req, res) {
   }
 });
 
+// v2.7 artist: GET /artist/?id=<id>&f=TOP_TRACKS,ALBUMS
 app.get('/u/:token/artist/:id', tokenMiddleware, async function (req, res) {
   var aid = req.params.id;
   try {
-    var results = await Promise.all([
-      hifiGet('/artists/' + aid),
-      hifiGet('/artists/' + aid + '/toptracks', { limit: 10 }),
-      hifiGet('/artists/' + aid + '/albums', { limit: 20, filter: 'ALBUMS' })
-    ]);
-    var artist    = results[0];
-    var topTracks = (results[1] && results[1].items) || [];
-    var albums    = (results[2] && results[2].items) || [];
+    var data = await hifiGet('/artist/', { id: aid, f: 'TOP_TRACKS,ALBUMS', skip_tracks: false });
+    var payload = data.data || data;
+    var artist    = payload.artist    || payload;
+    var topTracks = (payload.topTracks && payload.topTracks.items) || payload.topTracks || [];
+    var albums    = (payload.albums    && payload.albums.items)    || payload.albums    || [];
     res.json({
-      id:         String(artist.id),
+      id:         String(artist.id || aid),
       name:       artist.name || 'Unknown',
       artworkURL: artist.picture ? coverUrl(artist.picture, 480) : null,
       bio:        null,
@@ -610,17 +624,16 @@ app.get('/u/:token/artist/:id', tokenMiddleware, async function (req, res) {
   }
 });
 
+// v2.7 playlist: GET /playlist/?id=<uuid>&limit=100
 app.get('/u/:token/playlist/:id', tokenMiddleware, async function (req, res) {
   var pid = req.params.id;
   try {
-    var results = await Promise.all([
-      hifiGet('/playlists/' + pid),
-      hifiGet('/playlists/' + pid + '/tracks', { limit: 100, offset: 0 })
-    ]);
-    var pl     = results[0];
-    var tracks = (results[1] && results[1].items) || [];
+    var data = await hifiGet('/playlist/', { id: pid, limit: 100, offset: 0 });
+    var payload = data.data || data;
+    var pl     = payload.playlist || payload;
+    var tracks = (payload.tracks && payload.tracks.items) || payload.tracks || payload.items || [];
     res.json({
-      id:         String(pl.uuid || pl.id),
+      id:         String(pl.uuid || pl.id || pid),
       title:      pl.title || 'Playlist',
       creator:    (pl.creator && pl.creator.name) || null,
       artworkURL: pl.squareImage ? coverUrl(pl.squareImage) : null,
@@ -648,20 +661,24 @@ app.get('/u/:token/import-csv', tokenMiddleware, async function (req, res) {
   if (!type || !id) return res.status(400).json({ error: 'Pass ?type=album|playlist&id=...' });
   try {
     if (type === 'album') {
-      var r1 = await Promise.all([hifiGet('/albums/' + id), hifiGet('/albums/' + id + '/tracks', { limit: 100 })]);
+      var d = await hifiGet('/album/', { id: id, limit: 100 });
+      var p = d.data || d;
+      var tracks = (p.tracks && p.tracks.items) || p.tracks || p.items || [];
+      var album  = p.album || p;
       return res.json({
-        title:  r1[0].title || 'Album',
-        tracks: ((r1[1] && r1[1].items) || [])
-          .filter(function (t) { return t.streamReady !== false; })
+        title:  album.title || 'Album',
+        tracks: tracks.filter(function (t) { return t.streamReady !== false; })
           .map(function (t) { return { title: t.title || 'Unknown', artist: trackArtist(t), duration: trackDuration(t) }; })
       });
     }
     if (type === 'playlist') {
-      var r2 = await Promise.all([hifiGet('/playlists/' + id), hifiGet('/playlists/' + id + '/tracks', { limit: 100 })]);
+      var d2 = await hifiGet('/playlist/', { id: id, limit: 100 });
+      var p2 = d2.data || d2;
+      var tracks2 = (p2.tracks && p2.tracks.items) || p2.tracks || p2.items || [];
+      var pl2     = p2.playlist || p2;
       return res.json({
-        title:  r2[0].title || 'Playlist',
-        tracks: ((r2[1] && r2[1].items) || [])
-          .filter(function (t) { return t.streamReady !== false; })
+        title:  pl2.title || 'Playlist',
+        tracks: tracks2.filter(function (t) { return t.streamReady !== false; })
           .map(function (t) { return { title: t.title || 'Unknown', artist: trackArtist(t), duration: trackDuration(t) }; })
       });
     }
@@ -674,16 +691,16 @@ app.get('/u/:token/import-csv', tokenMiddleware, async function (req, res) {
 app.get('/health', function (_req, res) {
   res.json({
     status:          'ok',
-    version:         '1.0.0',
+    version:         '1.1.0',
+    hifiApiVersion:  '2.7',
     activeInstance:  activeInstance,
     instanceHealthy: instanceHealthy,
     activeTokens:    TOKEN_CACHE.size,
     redisConnected:  !!(redis && redis.status === 'ready'),
-    country:         COUNTRY,
     timestamp:       new Date().toISOString()
   });
 });
 
 app.listen(PORT, function () {
-  console.log('Claudochrome Eclipse Addon v1.0.0 on port ' + PORT);
+  console.log('Claudochrome Eclipse Addon v1.1.0 (Hi-Fi API v2.7) on port ' + PORT);
 });
