@@ -501,4 +501,23 @@ app.get('/u/:token/playlist/:id', tokenMiddleware, async function(req, res) {
 });
 
 // ─── Start ────────────────────────────────────────────────────────────────────
+
+// ─── Keep-alive self-ping (prevents Render free tier from sleeping) ───────
+// Render free tier spins down after 15 min of inactivity — causing the
+// "application loading" hang in Eclipse/Feather. Ping /health every 14 min.
+(function startKeepAlive() {
+  var selfUrl = process.env.RENDER_EXTERNAL_URL || null;
+  if (!selfUrl) {
+    console.log('[keep-alive] RENDER_EXTERNAL_URL not set — skipping self-ping.');
+    return;
+  }
+  var pingUrl = selfUrl.replace(/\/+$/, '') + '/health';
+  setInterval(function () {
+    axios.get(pingUrl, { timeout: 10000 })
+      .then(function () { console.log('[keep-alive] ping ok -> ' + pingUrl); })
+      .catch(function (e) { console.warn('[keep-alive] ping failed: ' + e.message); });
+  }, 14 * 60 * 1000); // every 14 minutes
+  console.log('[keep-alive] started, pinging ' + pingUrl + ' every 14 min');
+})();
 app.listen(PORT, function() { console.log('Claudochrome v2.0.0 (Hi-Fi API v2.7) on port ' + PORT); });
+
