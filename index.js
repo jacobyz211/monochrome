@@ -262,7 +262,7 @@ app.get('/u/:token/manifest.json', tokenMiddleware, function(req, res) {
     name:        'Claudochrome',
     version:     '2.0.0',
     description: 'Full TIDAL catalog via Hi-Fi API v2.7. Lossless FLAC, AAC 320. No account required.',
-    icon:        'https://upload.wikimedia.org/wikipedia/commons/4/41/Tidal_%28service%29_logo_only.svg',
+    icon:        'https://www.svgrepo.com/show/303276/tidal-logo.svg',
     resources:   ['search', 'stream', 'catalog'],
     types:       ['track', 'album', 'artist', 'playlist']
   });
