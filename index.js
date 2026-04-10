@@ -55,6 +55,14 @@ function looksLikePlaylist(p) {
   if (p.audioQuality !== undefined) return false;
   return !!(p.uuid || p.creator || p.squareImage || p.numberOfTracks !== undefined);
 }
+function artistRelevance(name, query) {
+  var n = (name  || '').toLowerCase().trim();
+  var q = (query || '').toLowerCase().trim();
+  if (n === q)                              return 4;
+  if (n.startsWith(q) || q.startsWith(n))  return 3;
+  if (n.includes(q)   || q.includes(n))    return 2;
+  return 0;
+}
 
 // ─── Hi-Fi API client (shared pool) ──────────────────────────────────────────
 async function hifiGet(path, params) {
@@ -327,20 +335,23 @@ app.get('/u/:token/search', tokenMiddleware, async function(req, res) {
   if (!q) return res.json({ tracks: [], albums: [], artists: [], playlists: [] });
 
   try {
-    var [mainResult, pl1, pl2, pl3, pl4, pl5] = await Promise.allSettled([
+    var [mainResult, pl1, pl2, pl3, pl4, pl5, ar1, ar2, ar3] = await Promise.allSettled([
       hifiGetForToken(inst, '/search/', { s: q, limit: 20, offset: 0 }),
-      hifiGetForTokenSafe(inst, '/search/', { s: q, type: 'PLAYLISTS', limit: 10, offset: 0 }),
+      hifiGetForTokenSafe(inst, '/search/', { s: q, type: 'PLAYLISTS',  limit: 10, offset: 0 }),
       hifiGetForTokenSafe(inst, '/search/', { s: q, types: 'PLAYLISTS', limit: 10, offset: 0 }),
       hifiGetForTokenSafe(inst, '/search/', { s: q, filter: 'PLAYLISTS', limit: 10, offset: 0 }),
       hifiGetForTokenSafe(inst, '/playlists/search/', { s: q, limit: 10, offset: 0 }),
-      hifiGetForTokenSafe(inst, '/search/playlists/', { s: q, limit: 10, offset: 0 })
+      hifiGetForTokenSafe(inst, '/search/playlists/', { s: q, limit: 10, offset: 0 }),
+      hifiGetForTokenSafe(inst, '/search/', { s: q, type: 'ARTISTS',  limit: 5, offset: 0 }),
+      hifiGetForTokenSafe(inst, '/search/', { s: q, types: 'ARTISTS', limit: 5, offset: 0 }),
+      hifiGetForTokenSafe(inst, '/search/artists/', { s: q, limit: 5, offset: 0 })
     ]);
 
     var data  = mainResult.status === 'fulfilled' ? mainResult.value : null;
     var items = (data && data.data && data.data.items) ? data.data.items : [];
     console.log('[search] got', items.length, 'items');
 
-    var albumMap = {}, artistMap = {}, tracks = [];
+    var albumMap = {}, artistMap = {}, artistHits = {}, tracks = [];
 
     for (var i = 0; i < items.length; i++) {
       var t = items[i];
@@ -354,13 +365,18 @@ app.get('/u/:token/search', tokenMiddleware, async function(req, res) {
       var arts = t.artists || (t.artist ? [t.artist] : []);
       for (var j = 0; j < arts.length; j++) {
         var a = arts[j];
-        if (a && a.id) { var arid = String(a.id); if (!artistMap[arid]) artistMap[arid] = { id: arid, name: a.name || 'Unknown', artworkURL: coverUrl(a.picture, 320) }; }
+        if (a && a.id) {
+          var arid = String(a.id);
+          if (!artistMap[arid]) artistMap[arid] = { id: arid, name: a.name || 'Unknown', artworkURL: coverUrl(a.picture, 320) };
+          artistHits[arid] = (artistHits[arid] || 0) + 1;
+        }
       }
 
       if (t.streamReady === false || t.allowStreaming === false) continue;
       tracks.push({ id: String(t.id), title: t.title || 'Unknown', artist: trackArtist(t), album: (t.album && t.album.title) || undefined, duration: trackDuration(t), artworkURL: coverUrl(t.album && t.album.cover), format: 'flac' });
     }
 
+    // ── Playlist extraction ───────────────────────────────────────────────────
     var plItems = [];
     var plCandidates = [pl1, pl2, pl3, pl4, pl5];
     var plLabels     = ['type=PLAYLISTS', 'types=PLAYLISTS', 'filter=PLAYLISTS', '/playlists/search/', '/search/playlists/'];
@@ -396,8 +412,59 @@ app.get('/u/:token/search', tokenMiddleware, async function(req, res) {
       }
     }
 
-    var albumList  = Object.keys(albumMap).map(function(k) { return albumMap[k]; }).slice(0, 8);
-    var artistList = Object.keys(artistMap).map(function(k) { return artistMap[k]; }).slice(0, 5);
+    var albumList = Object.keys(albumMap).map(function(k) { return albumMap[k]; }).slice(0, 8);
+
+    // ── Artist list: score by name relevance + hit count, prefer dedicated endpoints
+    var artistList = Object.keys(artistMap)
+      .sort(function(a, b) {
+        var scoreB = artistRelevance(artistMap[b].name, q) * 100 + (artistHits[b] || 0);
+        var scoreA = artistRelevance(artistMap[a].name, q) * 100 + (artistHits[a] || 0);
+        return scoreB - scoreA;
+      })
+      .slice(0, 5)
+      .map(function(k) { return artistMap[k]; });
+
+    // ── Try dedicated artist search endpoints to override track-derived list ──
+    var arCandidates = [ar1, ar2, ar3];
+    var arLabels     = ['type=ARTISTS', 'types=ARTISTS', '/search/artists/'];
+    for (var ai = 0; ai < arCandidates.length; ai++) {
+      var arRes = arCandidates[ai];
+      if (arRes.status !== 'fulfilled' || !arRes.value) continue;
+      var arRaw = arRes.value;
+
+      var arItems = [];
+      if      (arRaw.data && arRaw.data.artists && Array.isArray(arRaw.data.artists.items)) arItems = arRaw.data.artists.items;
+      else if (arRaw.data && arRaw.data.artists && Array.isArray(arRaw.data.artists))        arItems = arRaw.data.artists;
+      else if (arRaw.data && Array.isArray(arRaw.data.items))                                arItems = arRaw.data.items;
+      else if (Array.isArray(arRaw.items))                                                   arItems = arRaw.items;
+      else if (Array.isArray(arRaw.artists))                                                 arItems = arRaw.artists;
+
+      var realArtists = arItems.filter(function(a) { return a && (a.id || a.artistId) && a.name; });
+      console.log('[artist-search] "' + arLabels[ai] + '" real artists:', realArtists.length);
+
+      if (realArtists.length > 0) {
+        artistList = realArtists
+          .sort(function(a, b) { return artistRelevance(b.name, q) - artistRelevance(a.name, q); })
+          .slice(0, 5)
+          .map(function(a) {
+            return { id: String(a.id || a.artistId), name: a.name, artworkURL: coverUrl(a.picture || a.cover, 320) };
+          });
+        console.log('[search] using dedicated artist results:', artistList.length);
+        break;
+      }
+    }
+
+    // ── Artwork fallback: fetch top artist if artwork is missing ──────────────
+    if (artistList.length > 0 && !artistList[0].artworkURL) {
+      try {
+        var topArtData = await hifiGetForTokenSafe(inst, '/artist/', { id: artistList[0].id });
+        if (topArtData) {
+          var topArt = topArtData.data || topArtData;
+          var pic = (topArt.cover && topArt.cover['320']) || coverUrl(topArt.picture || topArt.image, 320);
+          if (pic) artistList[0].artworkURL = pic;
+        }
+      } catch (_) {}
+    }
 
     console.log('[search] returning tracks:', tracks.length, 'albums:', albumList.length, 'artists:', artistList.length, 'playlists:', plItems.length);
     res.json({ tracks: tracks, albums: albumList, artists: artistList, playlists: plItems });
