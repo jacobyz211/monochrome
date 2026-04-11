@@ -133,10 +133,11 @@ async function redisSave(token, entry) {
   if (!redis) return;
   try {
     await redis.set('mc:token:' + token, JSON.stringify({
-      createdAt:   entry.createdAt,
-      lastUsed:    entry.lastUsed,
-      reqCount:    entry.reqCount,
-      instanceUrl: entry.instanceUrl || null
+      createdAt:        entry.createdAt,
+      lastUsed:         entry.lastUsed,
+      reqCount:         entry.reqCount,
+      instanceUrl:      entry.instanceUrl      || null,
+      preferredQuality: entry.preferredQuality || null   // ← new
     }));
   } catch (e) {}
 }
@@ -146,7 +147,13 @@ async function redisLoad(token) {
     var d = await redis.get('mc:token:' + token);
     if (!d) return null;
     var p = JSON.parse(d);
-    return { createdAt: p.createdAt, lastUsed: p.lastUsed, reqCount: p.reqCount, instanceUrl: p.instanceUrl || null };
+    return {
+      createdAt:        p.createdAt,
+      lastUsed:         p.lastUsed,
+      reqCount:         p.reqCount,
+      instanceUrl:      p.instanceUrl      || null,
+      preferredQuality: p.preferredQuality || null   // ← new
+    };
   } catch (e) { return null; }
 }
 
@@ -163,8 +170,16 @@ async function getTokenEntry(token) {
   if (TOKEN_CACHE.has(token)) return TOKEN_CACHE.get(token);
   var saved = await redisLoad(token);
   if (!saved) return null;
-  var entry = { createdAt: saved.createdAt, lastUsed: saved.lastUsed, reqCount: saved.reqCount, instanceUrl: saved.instanceUrl || null, rateWin: [] };
-  TOKEN_CACHE.set(token, entry); return entry;
+  var entry = {
+    createdAt:        saved.createdAt,
+    lastUsed:         saved.lastUsed,
+    reqCount:         saved.reqCount,
+    instanceUrl:      saved.instanceUrl      || null,
+    preferredQuality: saved.preferredQuality || null,  // ← new
+    rateWin:          []
+  };
+  TOKEN_CACHE.set(token, entry);
+  return entry;
 }
 function checkRateLimit(entry) {
   var now = Date.now();
@@ -219,50 +234,114 @@ function buildConfigPage(baseUrl) {
   h += '.inst-url{flex:1;color:#666;font-family:"SF Mono","Fira Code",monospace;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}';
   h += '.inst-ms{color:#444;margin-left:auto;font-size:11px}';
   h += '.badge{display:none;background:#0d1a0d;border:1px solid #1a3a1a;border-radius:8px;padding:8px 12px;font-size:12px;color:#4a9a4a;margin-bottom:10px}';
+
+  // ── Quality selector styles ────────────────────────────────────────────────
+  h += '.ql-row{display:flex;gap:8px;margin-bottom:6px}';
+  h += '.ql-btn{flex:1;cursor:pointer;border:1px solid #2a2a2a;border-radius:10px;background:#0a0a0a;color:#555;font-size:12px;font-weight:700;padding:10px 6px;text-align:center;transition:all .15s;letter-spacing:.04em}';
+  h += '.ql-btn:hover{border-color:#444;color:#aaa}';
+  h += '.ql-btn.sel{background:#0d1520;border-color:#4a9eff;color:#4a9eff}';
+
   h += 'footer{margin-top:32px;font-size:12px;color:#2a2a2a;text-align:center;line-height:1.8}</style></head><body>';
+
   h += '<svg width="52" height="52" viewBox="0 0 52 52" fill="none" style="margin-bottom:22px"><circle cx="26" cy="26" r="26" fill="#fff"/><rect x="10" y="20" width="4" height="12" rx="2" fill="#000"/><rect x="17" y="14" width="4" height="24" rx="2" fill="#000"/><rect x="24" y="18" width="4" height="16" rx="2" fill="#000"/><rect x="31" y="11" width="4" height="30" rx="2" fill="#000"/><rect x="38" y="17" width="4" height="18" rx="2" fill="#000"/></svg>';
+
   h += '<div class="card"><h1>Claudochrome for Eclipse</h1>';
   h += '<p class="sub">Full TIDAL catalog — lossless FLAC, HiRes, AAC 320 — no account, no subscription.</p>';
   h += '<div class="tip"><b>Save your URL.</b> Paste it below to refresh without reinstalling.</div>';
   h += '<div class="pills"><span class="pill">Tracks &middot; Albums &middot; Artists</span><span class="pill hi">FLAC / HiRes</span><span class="pill hi">AAC 320</span></div>';
+
   h += '<div class="lbl">Custom Hi&#8209;Fi Instance <span style="color:#2a2a2a;font-weight:400;text-transform:none">(optional)</span></div>';
   h += '<input type="text" id="customInstance" placeholder="https://your-instance.example.com">';
   h += '<div class="hint">Leave blank to use the shared pool. Paste your own self-hosted Hi-Fi API URL to lock this token exclusively to your instance.</div>';
+
+  // ── Quality selector ───────────────────────────────────────────────────────
+  h += '<div class="lbl">Preferred Audio Quality <span style="color:#2a2a2a;font-weight:400;text-transform:none">(optional)</span></div>';
+  h += '<div class="ql-row">';
+  h += '<div class="ql-btn" id="ql-LOSSLESS" onclick="selectQuality(\'LOSSLESS\')">LOSSLESS<br><span style="font-size:10px;font-weight:400;color:inherit;opacity:.6">FLAC / HiRes</span></div>';
+  h += '<div class="ql-btn" id="ql-HIGH"     onclick="selectQuality(\'HIGH\')"    >HIGH<br><span style="font-size:10px;font-weight:400;color:inherit;opacity:.6">AAC 320 kbps</span></div>';
+  h += '<div class="ql-btn" id="ql-LOW"      onclick="selectQuality(\'LOW\')"     >LOW<br><span style="font-size:10px;font-weight:400;color:inherit;opacity:.6">AAC 128 kbps</span></div>';
+  h += '</div>';
+  h += '<div class="hint" id="qlHint">No preference — addon tries LOSSLESS &rarr; HIGH &rarr; LOW automatically.</div>';
+
   h += '<button class="bw" id="genBtn" onclick="generate()">Generate My Addon URL</button>';
   h += '<div class="box" id="genBox"><div class="badge" id="genBadge">&#10003; Locked to your custom instance</div><div class="blbl">Your addon URL &mdash; paste into Eclipse</div><div class="burl" id="genUrl"></div><button class="bd" id="copyGenBtn" onclick="copyGen()">Copy URL</button></div>';
+
   h += '<hr><div class="lbl">Refresh existing URL</div>';
   h += '<input type="text" id="existingUrl" placeholder="Paste your existing addon URL here">';
   h += '<div class="hint">Keeps the same URL active &mdash; nothing to reinstall.</div>';
   h += '<button class="bg" id="refBtn" onclick="doRefresh()">Refresh Existing URL</button>';
   h += '<div class="box" id="refBox"><div class="blbl">Refreshed &mdash; same URL still works in Eclipse</div><div class="burl" id="refUrl"></div><button class="bd" id="copyRefBtn" onclick="copyRef()">Copy URL</button></div>';
+
   h += '<hr><div class="steps">';
   h += '<div class="step"><div class="sn">1</div><div class="st">Generate and copy your URL above</div></div>';
   h += '<div class="step"><div class="sn">2</div><div class="st">Open <b>Eclipse</b> &rarr; Settings &rarr; Connections &rarr; Add Connection &rarr; Addon</div></div>';
   h += '<div class="step"><div class="sn">3</div><div class="st">Paste your URL and tap Install</div></div>';
   h += '<div class="step"><div class="sn">4</div><div class="st">Search TIDAL\'s full catalog &mdash; FLAC quality auto-selected</div></div>';
   h += '</div><div class="warn">Hi-Fi instances are community-hosted. The addon auto-discovers working instances and fails over automatically. Tokens locked to a custom instance will only use that instance.</div></div>';
+
   h += '<div class="card"><h2>Instance Health</h2>';
   h += '<p class="sub" style="margin-bottom:14px">Live status of all Hi-Fi API v2.7 instances.</p>';
   h += '<div class="inst-list" id="instList"><div style="color:#333;font-size:13px">Checking...</div></div>';
   h += '<button class="bg" style="margin-top:14px" onclick="checkHealth()">Refresh Status</button></div>';
   h += '<footer>Claudochrome Eclipse Addon v2.0.0 &bull; Hi-Fi API v2.7</footer>';
-  h += '<script>var _gu="",_ru="";';
-  h += 'function generate(){var btn=document.getElementById("genBtn");btn.disabled=true;btn.textContent="Generating...";';
-  h += 'var ci=document.getElementById("customInstance").value.trim();';
-  h += 'while(ci.length&&ci[ci.length-1]==="/")ci=ci.slice(0,-1);';
-  h += 'var body=ci?JSON.stringify({instanceUrl:ci}):"{}";';
-  h += 'fetch("/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:body}).then(function(r){return r.json();}).then(function(d){if(d.error){alert(d.error);btn.disabled=false;btn.textContent="Generate My Addon URL";return;}';
-  h += '_gu=d.manifestUrl;document.getElementById("genUrl").textContent=_gu;';
-  h += 'document.getElementById("genBadge").style.display=d.usingCustomInstance?"block":"none";';
-  h += 'document.getElementById("genBox").style.display="block";btn.disabled=false;btn.textContent="Regenerate URL";}).catch(function(e){alert("Error: "+e.message);btn.disabled=false;btn.textContent="Generate My Addon URL";});}';
+
+  h += '<script>';
+  h += 'var _gu="",_ru="",_selQ=null;';
+
+  // quality toggle — clicking the same pill again deselects it
+  h += 'var QLABELS={LOSSLESS:"LOSSLESS (FLAC / HiRes)",HIGH:"HIGH (AAC 320 kbps)",LOW:"LOW (AAC 128 kbps)"};';
+  h += 'function selectQuality(q){';
+  h += '  if(_selQ===q){_selQ=null;}else{_selQ=q;}';
+  h += '  ["LOSSLESS","HIGH","LOW"].forEach(function(k){';
+  h += '    document.getElementById("ql-"+k).classList.toggle("sel",_selQ===k);';
+  h += '  });';
+  h += '  document.getElementById("qlHint").textContent=_selQ';
+  h += '    ? "Preferred: "+QLABELS[_selQ]+" \u2014 fallback to lower qualities if unavailable."';
+  h += '    : "No preference \u2014 addon tries LOSSLESS \u2192 HIGH \u2192 LOW automatically.";';
+  h += '}';
+
+  h += 'function generate(){';
+  h += '  var btn=document.getElementById("genBtn");btn.disabled=true;btn.textContent="Generating...";';
+  h += '  var ci=document.getElementById("customInstance").value.trim();';
+  h += '  while(ci.length&&ci[ci.length-1]==="/")ci=ci.slice(0,-1);';
+  h += '  var body={};';
+  h += '  if(ci)body.instanceUrl=ci;';
+  h += '  if(_selQ)body.preferredQuality=_selQ;';   // ← send quality if chosen
+  h += '  fetch("/generate",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})';
+  h += '    .then(function(r){return r.json();})';
+  h += '    .then(function(d){';
+  h += '      if(d.error){alert(d.error);btn.disabled=false;btn.textContent="Generate My Addon URL";return;}';
+  h += '      _gu=d.manifestUrl;';
+  h += '      document.getElementById("genUrl").textContent=_gu;';
+  h += '      document.getElementById("genBadge").style.display=d.usingCustomInstance?"block":"none";';
+  h += '      document.getElementById("genBox").style.display="block";';
+  h += '      btn.disabled=false;btn.textContent="Regenerate URL";';
+  h += '    }).catch(function(e){alert("Error: "+e.message);btn.disabled=false;btn.textContent="Generate My Addon URL";});';
+  h += '}';
+
   h += 'function copyGen(){if(!_gu)return;navigator.clipboard.writeText(_gu).then(function(){var b=document.getElementById("copyGenBtn");b.textContent="Copied!";setTimeout(function(){b.textContent="Copy URL";},1500);});}';
-  h += 'function doRefresh(){var btn=document.getElementById("refBtn");var eu=document.getElementById("existingUrl").value.trim();if(!eu){alert("Paste your existing addon URL first.");return;}btn.disabled=true;btn.textContent="Refreshing...";';
-  h += 'fetch("/refresh",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({existingUrl:eu})}).then(function(r){return r.json();}).then(function(d){if(d.error){alert(d.error);btn.disabled=false;btn.textContent="Refresh Existing URL";return;}';
-  h += '_ru=d.manifestUrl;document.getElementById("refUrl").textContent=_ru;document.getElementById("refBox").style.display="block";btn.disabled=false;btn.textContent="Refresh Again";}).catch(function(e){alert("Error: "+e.message);btn.disabled=false;btn.textContent="Refresh Existing URL";});}';
+
+  h += 'function doRefresh(){';
+  h += '  var btn=document.getElementById("refBtn");';
+  h += '  var eu=document.getElementById("existingUrl").value.trim();';
+  h += '  if(!eu){alert("Paste your existing addon URL first.");return;}';
+  h += '  btn.disabled=true;btn.textContent="Refreshing...";';
+  h += '  fetch("/refresh",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({existingUrl:eu})})';
+  h += '    .then(function(r){return r.json();})';
+  h += '    .then(function(d){';
+  h += '      if(d.error){alert(d.error);btn.disabled=false;btn.textContent="Refresh Existing URL";return;}';
+  h += '      _ru=d.manifestUrl;document.getElementById("refUrl").textContent=_ru;';
+  h += '      document.getElementById("refBox").style.display="block";';
+  h += '      btn.disabled=false;btn.textContent="Refresh Again";';
+  h += '    }).catch(function(e){alert("Error: "+e.message);btn.disabled=false;btn.textContent="Refresh Existing URL";});';
+  h += '}';
+
   h += 'function copyRef(){if(!_ru)return;navigator.clipboard.writeText(_ru).then(function(){var b=document.getElementById("copyRefBtn");b.textContent="Copied!";setTimeout(function(){b.textContent="Copy URL";},1500);});}';
+
   h += 'function checkHealth(){var list=document.getElementById("instList");list.innerHTML="<div style=\\"color:#333;font-size:13px\\">Checking...</div>";';
   h += 'fetch("/instances").then(function(r){return r.json();}).then(function(data){list.innerHTML="";(data.instances||[]).forEach(function(inst){var row=document.createElement("div");row.className="inst";var dot=document.createElement("span");dot.className=inst.ok?"dot ok":"dot err";var urlSpan=document.createElement("span");urlSpan.className="inst-url";urlSpan.textContent=inst.url;row.appendChild(dot);row.appendChild(urlSpan);if(inst.ok){var ms=document.createElement("span");ms.className="inst-ms";ms.textContent=inst.ms+"ms";row.appendChild(ms);}list.appendChild(row);});}).catch(function(){list.innerHTML="<div style=\\"color:#c04040;font-size:13px\\">Could not reach server</div>";});}';
-  h += 'checkHealth();<\/script></body></html>';
+  h += 'checkHealth();';
+  h += '<\/script></body></html>';
   return h;
 }
 
@@ -285,10 +364,31 @@ app.post('/generate', async function(req, res) {
     }
   }
 
+  // ── Preferred quality ──────────────────────────────────────────────────────
+  var VALID_QUALITIES = ['LOSSLESS', 'HIGH', 'LOW'];
+  var preferredQuality = (req.body && req.body.preferredQuality && VALID_QUALITIES.includes(req.body.preferredQuality))
+    ? req.body.preferredQuality
+    : null;
+
   var token = generateToken();
-  var entry = { createdAt: Date.now(), lastUsed: Date.now(), reqCount: 0, rateWin: [], instanceUrl: instanceUrl };
-  TOKEN_CACHE.set(token, entry); await redisSave(token, entry); bucket.count++;
-  res.json({ token: token, manifestUrl: getBaseUrl(req) + '/u/' + token + '/manifest.json', usingCustomInstance: !!instanceUrl });
+  var entry = {
+    createdAt:        Date.now(),
+    lastUsed:         Date.now(),
+    reqCount:         0,
+    rateWin:          [],
+    instanceUrl:      instanceUrl,
+    preferredQuality: preferredQuality   // ← new
+  };
+  TOKEN_CACHE.set(token, entry);
+  await redisSave(token, entry);
+  bucket.count++;
+
+  res.json({
+    token:               token,
+    manifestUrl:         getBaseUrl(req) + '/u/' + token + '/manifest.json',
+    usingCustomInstance: !!instanceUrl,
+    preferredQuality:    preferredQuality   // ← echoed back to UI
+  });
 });
 
 app.post('/refresh', async function(req, res) {
@@ -477,9 +577,18 @@ app.get('/u/:token/search', tokenMiddleware, async function(req, res) {
 
 // ─── Stream ───────────────────────────────────────────────────────────────────
 app.get('/u/:token/stream/:id', tokenMiddleware, async function(req, res) {
-  var tid = req.params.id, qualities = ['LOSSLESS', 'HIGH', 'LOW'];
+  var tid  = req.params.id;
   var inst = req.tokenEntry.instanceUrl;
+
+  // Build quality order: preferred first, then the rest highest→lowest
+  var ALL_QUALITIES = ['LOSSLESS', 'HIGH', 'LOW'];
+  var pref = req.tokenEntry.preferredQuality;
+  var qualities = pref
+    ? [pref].concat(ALL_QUALITIES.filter(function(q) { return q !== pref; }))
+    : ALL_QUALITIES;
+
   for (var qi = 0; qi < qualities.length; qi++) {
+    // … rest of the loop is unchanged
     var ql = qualities[qi];
     try {
       var data = await hifiGetForToken(inst, '/track/', { id: tid, quality: ql });
