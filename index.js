@@ -10,6 +10,7 @@ app.use(cors());
 app.use(express.json());
 
 const HIFI_INSTANCES = [
+  'https://tidal-api.binimum.org',
   'https://ohio-1.monochrome.tf',
   'https://frankfurt-1.monochrome.tf',
   'https://eu-central.monochrome.tf',
