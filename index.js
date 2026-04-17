@@ -15,7 +15,6 @@ const HIFI_INSTANCES = [
   'https://eu-central.monochrome.tf',
   'https://us-west.monochrome.tf',
   'https://hifi.geeked.wtf',
-  'https://hifi-one.spotisaver.net',
   'https://monochrome-api.samidy.com'
 ];
 let activeInstance  = HIFI_INSTANCES[0];
